@@ -16,7 +16,7 @@ import Prelude
 
 import Bonsai.DOM (Document)
 import Control.Alt (class Alt)
-import Control.Monad.Aff (Aff, Fiber, launchAff_)
+import Control.Monad.Aff (Aff, Fiber, forkAff, joinFiber, launchAff_)
 import Control.Monad.Aff.AVar (AVar)
 import Control.Monad.Aff.Unsafe (unsafeCoerceAff)
 import Control.Monad.Eff (Eff, kind Effect)
@@ -44,13 +44,10 @@ foreign import data BONSAI :: Effect
 -- | The combined commands are issued in sequence.
 -- |
 -- | It is also a Monad and Plus, this gives all the monad goodies plus
--- | pure and empty.  `alt` is defined to be `append` -- the Alt instance
--- | is mainly there for `empty`.
+-- | pure and empty.  `alt` executes it's commands in parallel,
+-- | messages are emitted as they arrive.
 -- |
--- | I think it would be possible to define a parallel `apply` -
--- | currently it's just Monad's `ap`, so the commands are processed in
--- | sequence. It's always possible to do the fancy stuff using Aff
--- | in the TaskCmd.
+-- | TODO: parallel apply
 data Cmd eff msg
   = Cmd (Array msg)
   | TaskCmd (TaskContext eff msg -> Aff eff Unit)
@@ -77,13 +74,6 @@ instance cmdBind :: Bind (Cmd eff) where
 
 instance cmdMonad :: Monad (Cmd eff)
 
--- define <|> as <> ... not much use, but it lets us define empty
-instance cmdAlt :: Alt (Cmd eff) where
-  alt = append
-
-instance cmdPlus :: Plus (Cmd eff) where
-  empty = Cmd []
-
 mapTask
   :: forall eff a b
   .  (a -> b)
@@ -104,6 +94,7 @@ bindCmd (TaskCmd ta) faCb =
             Cmd bs -> do
               for_ bs contextB.emitter
             TaskCmd tb ->
+              -- XXX this is broken for nested tasks
               launchAff_ $ tb contextB
     in  ta (contextB { emitter = emitterA })
 
@@ -169,6 +160,31 @@ instance semigroupCmd :: Semigroup (Cmd eff msg) where
 
 instance monoidCmd :: Monoid (Cmd eff msg) where
   mempty = Cmd []
+
+
+-- alt behaves as a sort of 'stream union', the commands
+-- are executed in parallel, messages are emitted as they arrive
+instance cmdAlt :: Alt (Cmd eff) where
+  alt (TaskCmd task) (Cmd m) =
+    TaskCmd \ctx -> do
+      for_ m (emitMessage ctx)
+      task ctx
+  alt (TaskCmd t1) (TaskCmd t2) =
+    TaskCmd \ctx -> do
+      -- 'bhead is not a function'
+      -- when trying to use bracket
+      -- XXX fix it
+      fib1 <- forkAff $ t1 ctx
+      t2 ctx
+      joinFiber fib1
+
+  -- everything else is the same as append
+  alt x y = append x y
+
+
+instance cmdPlus :: Plus (Cmd eff) where
+  empty = Cmd []
+
 
 
 -- | The Task Context holds the emitter function for the task
