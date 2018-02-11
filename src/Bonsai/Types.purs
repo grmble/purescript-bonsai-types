@@ -173,9 +173,11 @@ instance monoidCmd :: Monoid (Cmd eff msg) where
 
 -- | The Task Context holds the emitter function for the task
 -- |
--- | Maybe: a way to get at the current model?
--- | That would mean the model has to encoded in all the view functions
--- | as well.  Maybe not a good idea.
+-- | `emitter` is a function that will queue the message
+-- | for processing.  `delay` is a function that will
+-- | delay until the next render, if the model is currently dirty.
+-- | `fiber` will be filled in with the aff fiber - it
+-- | can be used to cancel the task later on.
 type TaskContext eff msg =
   { emitter :: msg -> Eff eff Unit
   , delay :: Aff eff Unit
