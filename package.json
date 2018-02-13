@@ -2,7 +2,7 @@
   "private": true,
   "author": "Juergen Gmeiner <spamless.juergen@gmail.com>",
   "license": "MIT",
-  "devD:ependencies": {
+  "devDependencies": {
     "jsdom": "^11.6.2",
     "jsdom-simulant": "^1.1.2"
   }

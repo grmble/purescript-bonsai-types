@@ -9,6 +9,7 @@ module Bonsai.Types
   , emittingTask
   , simpleTask
   , unitTask
+  , unsafeCoerceCmd
   )
 where
 
@@ -24,6 +25,7 @@ import Control.Monad.Eff.Class (liftEff)
 import Control.Plus (class Plus)
 import Data.Foldable (fold, for_)
 import Data.Monoid (class Monoid)
+import Unsafe.Coerce (unsafeCoerce)
 
 
 -- | Effect for public types
@@ -94,9 +96,8 @@ bindCmd (TaskCmd ta) faCb =
             Cmd bs -> do
               for_ bs contextB.emitter
             TaskCmd tb ->
-              -- XXX this is broken for nested tasks
               launchAff_ $ tb contextB
-    in  ta (contextB { emitter = emitterA })
+    in ta (contextB { emitter = emitterA })
 
 
 -- | Emit helper for Tasks.
@@ -106,16 +107,19 @@ emitMessage :: forall aff msg. TaskContext aff msg -> msg -> Aff aff Unit
 emitMessage ctx msg =
   unsafeCoerceAff $ liftEff $ ctx.emitter msg
 
+
 -- | Delay the task until after the next render.
 delayUntilRendered :: forall eff aff msg. TaskContext eff msg -> Aff aff Unit
 delayUntilRendered ctx =
   unsafeCoerceAff $ ctx.delay
+
 
 -- | Produces a simple task (not cancellable, ony emits the return values
 simpleTask :: forall aff msg. Aff aff msg -> Cmd aff msg
 simpleTask aff =
   TaskCmd $ \ctx ->
     aff >>= emitMessage ctx
+
 
 -- | Procudes a task that can emit multiple times
 emittingTask
@@ -184,6 +188,11 @@ instance cmdAlt :: Alt (Cmd eff) where
 
 instance cmdPlus :: Plus (Cmd eff) where
   empty = Cmd []
+
+
+-- | Unsafe coerce the effects of a Cmd.
+unsafeCoerceCmd :: forall eff1 eff2 msg. Cmd eff1 msg -> Cmd eff2 msg
+unsafeCoerceCmd cmd = unsafeCoerce cmd
 
 
 

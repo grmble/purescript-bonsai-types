@@ -71,7 +71,11 @@ runCmd doc msgs (TaskCmd task) = do
 
   where
     emitter msg =
-      unsafeCoerceEff $ modifyRef msgs (\xs -> Array.snoc xs msg)
+      unsafeCoerceEff $ do
+        -- log ("runCmd emitter: " <> msg)
+        modifyRef msgs (\xs -> Array.snoc xs msg)
+        -- weHave <- readRef msgs
+        -- log ("we have: " <> show weHave)
 
 
 -- | Run a Cmd and collect side effects and results
@@ -79,14 +83,27 @@ testCmd
   :: forall eff
   .  (Ref (Array SideEffect) -> Cmd eff String)
   -> Aff eff (Tuple (Array SideEffect) (Array String))
-testCmd fn = do
+testCmd fn =
+  testCmdDelay (Milliseconds 0.0) fn
+
+-- | Run a Cmd and collect side effects and results
+-- |
+-- | Will delay before returning results ...
+testCmdDelay
+  :: forall eff
+  .  Milliseconds
+  -> (Ref (Array SideEffect) -> Cmd eff String)
+  -> Aff eff (Tuple (Array SideEffect) (Array String))
+testCmdDelay millis fn = do
   doc <- unsafeCoerceAff $ testDocument
   mref <- unsafeCoerceAff $ liftEff' $ newRef []
   sref <- unsafeCoerceAff $ liftEff' $ newRef []
   runCmd doc mref (fn sref)
+  delay millis
   sides <- unsafeCoerceAff $ liftEff' $ readRef sref
   msgs <- unsafeCoerceAff $ liftEff' $ readRef mref
   pure $ Tuple sides msgs
+
 
 
 sideEffect :: forall eff. Ref (Array SideEffect) -> SideEffect -> Aff (ref::REF|eff) Unit
@@ -278,7 +295,6 @@ monadTests =
         msg1 <- Cmd ["a", "b"]
         msg2 <- delayedCmd sref [10, 30]
         pure (msg1 <> ":" <> msg2)
-      -- delay (Milliseconds 100.0)
       Assert.equal [ SideEffect 10, SideEffect 30,  SideEffect 10, SideEffect 30 ] sides
       Assert.equal [ "a:10", "a:30", "b:10", "b:30" ] msgs
     test "taskDoCmd" do
@@ -289,17 +305,12 @@ monadTests =
       -- outer effect gets evaluated only once
       Assert.equal [ SideEffect 10, SideEffect 30 ] sides
       Assert.equal [ "10:A", "10:B", "30:A", "30:B" ] msgs
-
-    {--
-
-    XXX fix this
-
     test "taskDoTask" do
-      Tuple sides msgs <- testCmd \sref -> do
+      Tuple sides msgs <- testCmdDelay (Milliseconds 200.0) \sref -> do
         msg1 <- delayedCmd sref [10, 30]
         msg2 <- delayedCmd sref [20, 40]
         pure (msg1 <> ":" <> msg2)
-      delay (Milliseconds 500.0)
-      -- Assert.equal [ SideEffect 10, SideEffect 20, SideEffect 30 ] sides
-      Assert.equal [ "10:20", "30:40" ] msgs
-    --}
+      -- the order here is determined by the delays, and 10/30 are in the outer loop
+      Assert.equal (map SideEffect [ 10, 20, 30, 20, 40, 40 ]) sides
+      -- the delays from the line above drive the order the combinations arrive in
+      Assert.equal [ "10:20", "30:20", "10:40", "30:40" ] msgs
