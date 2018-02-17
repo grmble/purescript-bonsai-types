@@ -48,22 +48,13 @@ foreign import data BONSAI :: Effect
 -- | It is also a Monad and Plus, this gives all the monad goodies plus
 -- | pure and empty.  `alt` executes it's commands in parallel,
 -- | messages are emitted as they arrive.
--- |
--- | TODO: parallel apply
 data Cmd eff msg
   = Cmd (Array msg)
   | TaskCmd (TaskContext eff msg -> Aff eff Unit)
 
 -- Cmd is a functor so VNodes/Events can be mapped
 instance cmdFunctor :: Functor (Cmd eff) where
-  -- use liftA1 to test bind instance
   map = liftA1
-  {--
-  map f (Cmd ms) =
-    Cmd $ map f ms
-  map f (TaskCmd task) =
-    TaskCmd $ mapTask f task
-  --}
 
 instance cmdApply :: Apply (Cmd eff) where
   apply = ap
@@ -75,14 +66,6 @@ instance cmdBind :: Bind (Cmd eff) where
   bind = bindCmd
 
 instance cmdMonad :: Monad (Cmd eff)
-
-mapTask
-  :: forall eff a b
-  .  (a -> b)
-  -> (TaskContext eff a -> Aff eff Unit)
-  -> (TaskContext eff b -> Aff eff Unit)
-mapTask f ta contextB =
-  ta (contextB { emitter = \a -> contextB.emitter $ f a })
 
 
 bindCmd :: forall eff a b. Cmd eff a -> (a -> Cmd eff b) -> Cmd eff b
@@ -114,14 +97,29 @@ delayUntilRendered ctx =
   unsafeCoerceAff $ ctx.delay
 
 
--- | Produces a simple task (not cancellable, ony emits the return values
-simpleTask :: forall aff msg. Aff aff msg -> Cmd aff msg
+-- | Produces a simple task
+-- |
+-- | A simple task is not cancelable and it can only emit one
+-- | single message - the return value returned by the Aff.
+-- |
+-- | It does get the Document, so it can do DOM manipulations
+-- | and perform aribitrary aff operations, e.g. AJAX calls to
+-- | a server.
+simpleTask :: forall aff msg. (Document -> Aff aff msg) -> Cmd aff msg
 simpleTask aff =
   TaskCmd $ \ctx ->
-    aff >>= emitMessage ctx
+    aff ctx.document >>= emitMessage ctx
 
 
 -- | Procudes a task that can emit multiple times
+-- |
+-- | This type of task has access to the full task context,
+-- | so it can emit as many of the given type as it wants to.
+-- | (Don't `unsafeCoerce` the type - that will just break all the
+-- | outer mapping functions).
+-- |
+-- | It can also access it's `Fiber`, so it can arrange for its own
+-- | cancellation.
 emittingTask
   :: forall aff msg
   .  (TaskContext aff msg -> Aff aff Unit)
@@ -129,10 +127,17 @@ emittingTask
 emittingTask = TaskCmd
 
 
--- | An effectful task without return value - e.g. write to storage, ...
-unitTask :: forall aff msg. Aff aff Unit -> Cmd aff msg
+-- | An effectful task that does not emit a message.
+-- |
+-- | Even simpler than  the simple task, this one can
+-- | not change the model in any way, it can only
+-- | produce side effects.
+-- |
+-- | It does get the `Document`, so it can manipulate the DOM.
+-- | It could also store the model in local storage.
+unitTask :: forall aff msg. (Document -> Aff aff Unit) -> Cmd aff msg
 unitTask aff =
-  TaskCmd $ \_ -> aff
+  TaskCmd $ \ctx -> aff ctx.document
 
 
 

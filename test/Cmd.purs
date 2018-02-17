@@ -138,13 +138,13 @@ simpleTests =
 
     test "unitTask" $ do
       Tuple sides msgs <- testCmd \sref ->
-        unitTask $ sideEffect sref (SideEffect 1)
+        unitTask $ const $ sideEffect sref (SideEffect 1)
       Assert.equal [] msgs
       Assert.equal [ SideEffect 1 ] sides
 
     test "simpleTask" $ do
       Tuple sides msgs <- testCmd \sref ->
-        simpleTask do
+        simpleTask $ const do
           sideEffect sref (SideEffect 1)
           pure "A"
       Assert.equal [ "A" ] msgs
@@ -278,8 +278,8 @@ monadTests =
     test "unitTask>>=" do
       -- sideEffects are executed until first empty
       Tuple sides msgs <- testCmd \sref -> do
-        msg <- unitTask (sideEffect sref (SideEffect 1))
-        msg2 <- unitTask (sideEffect sref (SideEffect 2))
+        msg <- unitTask $ const (sideEffect sref (SideEffect 1))
+        msg2 <- unitTask $ const (sideEffect sref (SideEffect 2))
         pure "X"
       Assert.equal [ SideEffect 1 ] sides
       Assert.equal [ ] msgs
