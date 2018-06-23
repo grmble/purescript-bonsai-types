@@ -2,26 +2,23 @@ module Test.Cmd where
 
 import Prelude
 
-import Bonsai.DOM (DOM, Document, affF)
+import Bonsai.DOM (Document, affF)
 import Bonsai.JSDOM (jsdomDocument)
 import Bonsai.Types (Cmd(..), emitMessage, emittingTask, simpleTask, unitTask)
-import Control.Monad.Aff (Aff, Milliseconds(..), delay, liftEff')
-import Control.Monad.Aff.AVar (makeEmptyVar)
-import Control.Monad.Aff.Unsafe (unsafeCoerceAff)
-import Control.Monad.Eff.Console (CONSOLE)
-import Control.Monad.Eff.Ref (REF, Ref, modifyRef, newRef, readRef)
-import Control.Monad.Eff.Unsafe (unsafeCoerceEff)
+import Effect.Aff (Aff, Milliseconds(..), delay)
+import Effect.Class (liftEffect)
+import Effect.Aff.AVar as AVar
+import Effect.Ref as Ref
 import Control.Monad.Free (Free)
 import Control.Plus (empty, (<|>))
 import Data.Array as Array
 import Data.Foldable (for_)
 import Data.Int (toNumber)
-import Data.Monoid (mempty)
 import Data.Tuple (Tuple(..))
 import Test.Unit (TestF, suite, test)
 import Test.Unit.Assert as Assert
 
-tests :: forall eff. Free (TestF (console::CONSOLE,dom::DOM,ref::REF|eff)) Unit
+tests :: Free TestF Unit
 tests = do
   simpleTests
   monoidTests
@@ -52,16 +49,16 @@ derive newtype instance eqSideEffect :: Eq SideEffect
 derive newtype instance showSideEffect :: Show SideEffect
 
 runCmd
-  :: forall eff
-  .  Document
-  -> Ref (Array String)
-  -> Cmd eff String
-  -> Aff eff Unit
+  :: Document
+  -> Ref.Ref (Array String)
+  -> Cmd String
+  -> Aff Unit
 runCmd _ msgs (Cmd ms) = do
-  unsafeCoerceAff $ liftEff' $ modifyRef msgs (\xs -> xs <> ms)
+  _ <- liftEffect $ Ref.modify (\xs -> xs <> ms) msgs
+  pure unit
 
 runCmd doc msgs (TaskCmd task) = do
-  fib <- unsafeCoerceAff $ makeEmptyVar
+  fib <- AVar.empty
   let tc = { emitter : emitter
            , delay: pure unit
            , fiber: fib
@@ -70,19 +67,18 @@ runCmd doc msgs (TaskCmd task) = do
   task tc
 
   where
-    emitter msg =
-      unsafeCoerceEff $ do
-        -- log ("runCmd emitter: " <> msg)
-        modifyRef msgs (\xs -> Array.snoc xs msg)
-        -- weHave <- readRef msgs
-        -- log ("we have: " <> show weHave)
+    emitter msg = do
+      -- log ("runCmd emitter: " <> msg)
+      _ <- Ref.modify (\xs -> Array.snoc xs msg) msgs
+      -- weHave <- readRef msgs
+      -- log ("we have: " <> show weHave)
+      pure unit
 
 
 -- | Run a Cmd and collect side effects and results
 testCmd
-  :: forall eff
-  .  (Ref (Array SideEffect) -> Cmd eff String)
-  -> Aff eff (Tuple (Array SideEffect) (Array String))
+  :: (Ref.Ref (Array SideEffect) -> Cmd String)
+  -> Aff (Tuple (Array SideEffect) (Array String))
 testCmd fn =
   testCmdDelay (Milliseconds 0.0) fn
 
@@ -90,35 +86,35 @@ testCmd fn =
 -- |
 -- | Will delay before returning results ...
 testCmdDelay
-  :: forall eff
-  .  Milliseconds
-  -> (Ref (Array SideEffect) -> Cmd eff String)
-  -> Aff eff (Tuple (Array SideEffect) (Array String))
+  :: Milliseconds
+  -> (Ref.Ref (Array SideEffect) -> Cmd String)
+  -> Aff (Tuple (Array SideEffect) (Array String))
 testCmdDelay millis fn = do
-  doc <- unsafeCoerceAff $ testDocument
-  mref <- unsafeCoerceAff $ liftEff' $ newRef []
-  sref <- unsafeCoerceAff $ liftEff' $ newRef []
+  doc <- testDocument
+  mref <- liftEffect $ Ref.new []
+  sref <- liftEffect $ Ref.new []
   runCmd doc mref (fn sref)
   delay millis
-  sides <- unsafeCoerceAff $ liftEff' $ readRef sref
-  msgs <- unsafeCoerceAff $ liftEff' $ readRef mref
+  sides <- liftEffect $ Ref.read sref
+  msgs <- liftEffect $ Ref.read mref
   pure $ Tuple sides msgs
 
 
 
-sideEffect :: forall eff. Ref (Array SideEffect) -> SideEffect -> Aff (ref::REF|eff) Unit
+sideEffect :: Ref.Ref (Array SideEffect) -> SideEffect -> Aff Unit
 sideEffect sref side@(SideEffect sideI) = do
   delay (Milliseconds $ toNumber sideI)
-  liftEff' $ modifyRef sref (\xs -> Array.snoc xs side)
+  _ <- liftEffect $ Ref.modify (\xs -> Array.snoc xs side) sref
+  pure unit
 
-testDocument :: forall eff. Aff (dom::DOM|eff) Document
+testDocument :: Aff Document
 testDocument =
   affF $ jsdomDocument """<div id="main">Loading ...</div>"""
 
 --
 -- tests emitted messages/side effects for the Cmd primitives
 --
-simpleTests :: forall eff. Free (TestF (console::CONSOLE,dom::DOM,ref::REF|eff)) Unit
+simpleTests :: Free TestF Unit
 simpleTests =
   suite "simple" do
     test "empty" $ do
@@ -161,18 +157,18 @@ simpleTests =
       Assert.equal [ SideEffect 1, SideEffect 2 ] sides
 
 
-delayedCmd :: forall eff. Ref (Array SideEffect) -> Array Int -> Cmd eff String
+delayedCmd :: Ref.Ref (Array SideEffect) -> Array Int -> Cmd String
 delayedCmd sref delays =
-  emittingTask \ctx -> unsafeCoerceAff $
+  emittingTask \ctx ->
     for_ delays \i -> do
       sideEffect sref (SideEffect i)
-      unsafeCoerceAff $ emitMessage ctx (show i)
+      emitMessage ctx (show i)
 
 --
 -- the monoid instance has string andThen behaviour
 -- the commands are executed in sequence, the second
 -- one is only started after the first one ends.
-monoidTests :: forall eff. Free (TestF (console::CONSOLE,dom::DOM,ref::REF|eff)) Unit
+monoidTests :: Free TestF Unit
 monoidTests =
   suite "Monoid Cmd" do
     test "mempty<>pure" do
@@ -220,7 +216,7 @@ monoidTests =
 
 -- <|> behaves as a stream union:  the commands are executed in
 -- parallel, messages are emitted as they come in
-altTests :: forall eff. Free (TestF (console::CONSOLE,dom::DOM,ref::REF|eff)) Unit
+altTests :: Free TestF Unit
 altTests =
   suite "Alt Cmd" do
     test "empty<|>pure" do
@@ -266,7 +262,7 @@ altTests =
       Assert.equal [ "10", "20", "30", "40"] msgs
 
 
-monadTests :: forall eff. Free (TestF (console::CONSOLE,dom::DOM,ref::REF|eff)) Unit
+monadTests :: Free TestF Unit
 monadTests =
   suite "Monad Cmd" do
     test "empty>>=" do
